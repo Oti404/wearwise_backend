@@ -1,0 +1,41 @@
+# ─── Node.js / Dependințe ───
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+package-lock.json
+yarn.lock
+
+# ─── Variabile de mediu (SECRETE) ───
+.env
+.env.*
+!.env.example
+
+# ─── Expo / React Native (Frontend) ───
+.expo/
+dist/
+web-build/
+build/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# ─── Firebase ───
+firebase-debug.log
+firebase-debug.*.log
+
+# ─── Build-uri și loguri de Backend ───
+coverage/
+out/
+logs/
+*.log
+
+# ─── Editor de cod / Sistem de operare ───
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+serviceAccountKey.json
