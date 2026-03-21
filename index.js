@@ -19,23 +19,38 @@ app.get('/ping', (req, res) => res.send('pong'));
 // Initialize Firebase Admin
 let db;
 try {
+  // Option 1: Try local JSON file (Development)
   const serviceAccount = require('./serviceAccountKey.json');
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount)
   });
-  db = admin.firestore();
-  db.settings({ ignoreUndefinedProperties: true });
   console.log('Firebase Admin initialized with service account.');
 } catch (error) {
-  console.warn('⚠️ Firebase Admin NOT initialized. Please add serviceAccountKey.json in the backend folder.');
-  // Fallback for development if environment variables are set
-  if (process.env.FIREBASE_PROJECT_ID) {
+  // Option 2: Environment Variables (Production)
+  if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PROJECT_ID) {
     admin.initializeApp({
-      projectId: process.env.FIREBASE_PROJECT_ID
+      credential: admin.credential.cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      })
     });
-    db = admin.firestore();
-    console.log('Firebase initialized with Project ID fallback.');
+    console.log('Firebase initialized with Environment Variables.');
+  } else {
+    console.warn('⚠️ Firebase Admin NOT initialized. Please add serviceAccountKey.json OR set FIREBASE_ environment variables.');
+    // Check for just Project ID fallback (limited functionality)
+    if (process.env.FIREBASE_PROJECT_ID) {
+      admin.initializeApp({
+        projectId: process.env.FIREBASE_PROJECT_ID
+      });
+      console.log('Firebase initialized with Project ID fallback (Read-only or limited).');
+    }
   }
+}
+
+if (admin.apps.length > 0) {
+  db = admin.firestore();
+  db.settings({ ignoreUndefinedProperties: true });
 }
 
 // Endpoint: Check Phone Uniqueness & Register User Data
@@ -337,7 +352,8 @@ app.post('/checkout', async (req, res) => {
     const notifRef = db.collection('notifications');
 
     for (const itemId of items) {
-      const docRef = clothesRef.doc(itemId);
+      if (!itemId) continue;
+      const docRef = clothesRef.doc(String(itemId));
       const itemDoc = await docRef.get();
       
       if (!itemDoc.exists) continue;
@@ -350,17 +366,21 @@ app.post('/checkout', async (req, res) => {
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       });
 
+      const actualSellerId = itemData.userId || 'unknown';
+
       // 1. Notify Seller: Someone bought your item!
-      const sellerNotif = notifRef.doc();
-      batch.set(sellerNotif, {
-        userId: itemData.userId, // The owner
-        type: 'sale_notification',
-        title: 'Articol Vândut! 🎉',
-        message: `Felicitări! Ai vândut '${itemData.name}'.`,
-        itemId: itemId,
-        unread: true,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      if (actualSellerId !== 'unknown') {
+        const sellerNotif = notifRef.doc();
+        batch.set(sellerNotif, {
+          userId: actualSellerId, // The owner
+          type: 'sale_notification',
+          title: 'Articol Vândut! 🎉',
+          message: `Felicitări! Ai vândut '${itemData.name}'.`,
+          itemId: String(itemId),
+          unread: true,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
 
       // 2. Notify Buyer: Please rate the seller/item
       const buyerNotif = notifRef.doc();
@@ -369,24 +389,27 @@ app.post('/checkout', async (req, res) => {
         type: 'rating_request',
         title: 'Evaluează achiziția ⭐️',
         message: `Cum a fost experiența cu '${itemData.name}'? Lasă un rating vânzătorului.`,
-        itemId: itemId,
-        sellerId: itemData.userId,
+        itemId: String(itemId),
+        sellerId: actualSellerId,
         unread: true,
         status: 'pending',
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
       // 3. Update Seller Stats
-      const sellerRef = db.collection('users').doc(itemData.userId);
-      const statUpdate = {};
-      if (itemData.mode === 'donate') {
-        statUpdate.donationsCount = admin.firestore.FieldValue.increment(1);
-      } else if (itemData.mode === 'trade') {
-        statUpdate.tradesCount = admin.firestore.FieldValue.increment(1);
-      } else {
-        statUpdate.salesCount = admin.firestore.FieldValue.increment(1);
+      if (actualSellerId !== 'unknown') {
+        const sellerRef = db.collection('users').doc(actualSellerId);
+        const statUpdate = {};
+        if (itemData.mode === 'donate') {
+          statUpdate.donationsCount = admin.firestore.FieldValue.increment(1);
+        } else if (itemData.mode === 'trade') {
+          statUpdate.tradesCount = admin.firestore.FieldValue.increment(1);
+        } else {
+          statUpdate.salesCount = admin.firestore.FieldValue.increment(1);
+        }
+        // Folosim SET cu merge:true în loc de update, ca să nu dea crăpare dacă doc userului a dispărut
+        batch.set(sellerRef, statUpdate, { merge: true });
       }
-      batch.update(sellerRef, statUpdate);
     }
 
     await batch.commit();
